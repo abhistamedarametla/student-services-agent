@@ -6,6 +6,10 @@ from google.genai import types
 from agent.guardrail import DomainDecision, AgentDecision
 
 
+# ============================================================
+# DOMAIN CLASSIFICATION INSTRUCTIONS
+# ============================================================
+
 DOMAIN_INSTRUCTIONS = """
 You are the domain classifier for a Student Services AI Agent.
 
@@ -21,16 +25,16 @@ or other genuine student-service needs.
 Understand the meaning and purpose of the complete request.
 Do not classify using individual keywords alone.
 
-For example:
+Examples:
 
-- "Who won yesterday's cricket match?"
-  -> Outside the domain.
+1. "Who won yesterday's cricket match?"
+   -> Outside the domain.
 
-- "I am doing a college project on sports analytics.
+2. "I am doing a college project on sports analytics.
    Explain how machine learning can predict cricket player
    performance."
-  -> In the domain because the purpose is educational/
-     technical learning.
+   -> In the domain because the purpose is educational/
+      technical learning.
 
 If the request is unrelated to education or student services,
 mark it as outside the domain.
@@ -38,6 +42,10 @@ mark it as outside the domain.
 Return only the structured result requested by the response schema.
 """
 
+
+# ============================================================
+# ACTION PLANNING INSTRUCTIONS
+# ============================================================
 
 PLANNER_INSTRUCTIONS = """
 You are the decision-making component of a Student Services AI Agent.
@@ -72,8 +80,15 @@ Return only the structured result requested by the response schema.
 """
 
 
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
 @st.cache_resource
 def get_gemini_client():
+    """
+    Create and cache the Gemini API client.
+    """
 
     api_key = st.secrets["GEMINI_API_KEY"]
 
@@ -86,12 +101,20 @@ def get_gemini_client():
     )
 
 
+# ============================================================
+# DOMAIN CLASSIFICATION
+# ============================================================
+
 def classify_domain(question: str) -> DomainDecision:
+    """
+    Determine whether the user's question belongs
+    to the student-services domain.
+    """
 
     client = get_gemini_client()
 
     interaction = client.interactions.create(
-        model="gemini-3.6-flash",
+        model="gemini-3.8-flash",
         system_instruction=DOMAIN_INSTRUCTIONS,
         input=question,
         response_format={
@@ -109,12 +132,20 @@ def classify_domain(question: str) -> DomainDecision:
     )
 
 
+# ============================================================
+# ACTION PLANNING
+# ============================================================
+
 def plan_action(question: str) -> AgentDecision:
+    """
+    Decide what action the agent should perform
+    for an in-domain question.
+    """
 
     client = get_gemini_client()
 
     interaction = client.interactions.create(
-        model="gemini-3.6-flash",
+        model="gemini-3.8-flash",
         system_instruction=PLANNER_INSTRUCTIONS,
         input=question,
         response_format={
@@ -132,6 +163,10 @@ def plan_action(question: str) -> AgentDecision:
     )
 
 
+# ============================================================
+# GOOGLE SEARCH
+# ============================================================
+
 def answer_with_google_search(question: str) -> str:
     """
     Answer a question using Gemini with Google Search grounding.
@@ -140,7 +175,7 @@ def answer_with_google_search(question: str) -> str:
     client = get_gemini_client()
 
     interaction = client.interactions.create(
-        model="gemini-3.6-flash",
+        model="gemini-3.8-flash",
         input=question,
         tools=[
             {
@@ -155,6 +190,10 @@ def answer_with_google_search(question: str) -> str:
     return interaction.output_text
 
 
+# ============================================================
+# CONTINUOUS CONVERSATION
+# ============================================================
+
 def continue_conversation(
     question: str,
     previous_interaction_id: str | None = None,
@@ -162,28 +201,31 @@ def continue_conversation(
     """
     Continue a multi-turn conversation with Gemini.
 
-    If previous_interaction_id is provided, Gemini can use
-    the previous interaction as conversation context.
+    If previous_interaction_id is provided,
+    Gemini can use the previous interaction as context.
     """
 
     client = get_gemini_client()
 
-    interaction_args = {
-        "model": "gemini-3.6-flash",
-        "input": question,
-        "generation_config": {
-            "thinking_level": "low",
-        },
-    }
+    if previous_interaction_id is not None:
 
-    if previous_interaction_id:
-
-        interaction_args["previous_interaction_id"] = (
-            previous_interaction_id
+        interaction = client.interactions.create(
+            model="gemini-3.8-flash",
+            input=question,
+            previous_interaction_id=previous_interaction_id,
+            generation_config={
+                "thinking_level": "low",
+            },
         )
 
-    interaction = client.interactions.create(
-        **interaction_args
-    )
+    else:
+
+        interaction = client.interactions.create(
+            model="gemini-3.8-flash",
+            input=question,
+            generation_config={
+                "thinking_level": "low",
+            },
+        )
 
     return interaction
