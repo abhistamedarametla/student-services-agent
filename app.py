@@ -1,13 +1,11 @@
 import streamlit as st
 
 from services.gemini_service import (
-    classify_domain,
-    plan_action,
+    analyze_request,
     continue_conversation,
+    answer_with_calculation,
     answer_with_google_search,
 )
-
-from services.agent_service import execute_agent_decision
 
 
 # =========================================================
@@ -15,13 +13,17 @@ from services.agent_service import execute_agent_decision
 # =========================================================
 
 st.set_page_config(
-    page_title="Student Services Agent",
+    page_title="Student Services Agent V2",
     page_icon="🎓",
     layout="centered",
 )
 
 
-st.title("🎓 Student Services Agent")
+# =========================================================
+# PAGE TITLE
+# =========================================================
+
+st.title("🎓 Student Services Agent ")
 
 st.caption(
     "Domain-specific AI agent for educational and student-service queries"
@@ -31,10 +33,6 @@ st.caption(
 # =========================================================
 # SESSION STATE
 # =========================================================
-
-if "previous_interaction_id" not in st.session_state:
-    st.session_state.previous_interaction_id = None
-
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -48,11 +46,10 @@ with st.sidebar:
 
     st.header("Agent Capabilities")
 
-    st.write("✅ Semantic domain classification")
-    st.write("✅ Agent action planning")
+    st.write("✅ Combined semantic domain + action analysis")
     st.write("✅ Direct educational answers")
-    st.write("✅ Gemini-based calculations")
-    st.write("✅ Google Search grounding")
+    st.write("✅ Groq-powered calculations")
+    st.write("✅ Browser Search grounding")
     st.write("✅ Conversation memory")
     st.write("✅ Out-of-domain rejection")
 
@@ -63,7 +60,6 @@ with st.sidebar:
         use_container_width=True,
     ):
 
-        st.session_state.previous_interaction_id = None
         st.session_state.messages = []
 
         st.rerun()
@@ -77,7 +73,7 @@ for message in st.session_state.messages:
 
     with st.chat_message(message["role"]):
 
-        st.write(message["content"])
+        st.markdown(message["content"])
 
 
 # =========================================================
@@ -86,20 +82,17 @@ for message in st.session_state.messages:
 
 def build_context(question: str) -> str:
     """
-    Build a small representation of recent conversation.
+    Build a compact representation of recent conversation.
 
-    This helps the domain classifier and planner understand
-    follow-up questions such as:
-
-    "Give me an example."
-    "What are its advantages?"
-    "Calculate that."
+    This helps the agent understand follow-up questions while
+    preventing the conversation history from becoming too large.
     """
 
     if not st.session_state.messages:
         return question
 
-    recent_messages = st.session_state.messages[-6:]
+    # Keep only the most recent 4 messages.
+    recent_messages = st.session_state.messages[-4:]
 
     context_parts = []
 
@@ -107,7 +100,8 @@ def build_context(question: str) -> str:
 
         role = message["role"].upper()
 
-        content = message["content"]
+        # Limit each previous message to 1200 characters.
+        content = message["content"][:1200]
 
         context_parts.append(
             f"{role}: {content}"
@@ -117,81 +111,10 @@ def build_context(question: str) -> str:
         f"CURRENT USER QUESTION: {question}"
     )
 
-    return "\n\n".join(context_parts)
+    context = "\n\n".join(context_parts)
 
-
-# =========================================================
-# GEMINI CALCULATION
-# =========================================================
-
-def answer_with_calculation(question: str) -> str:
-    """
-    Ask Gemini to understand and solve a calculation-related
-    student question.
-
-    The calculation is not restricted to predefined functions
-    such as percentage() or average().
-
-    Gemini determines what mathematical calculation is required
-    from the natural-language question.
-    """
-
-    calculation_instruction = """
-You are the calculation component of a Student Services AI Agent.
-
-Solve the user's calculation question carefully.
-
-The question may involve any reasonable mathematical calculation
-related to education, academics, examinations, marks, percentages,
-averages, ratios, weighted scores, attendance, grades, comparisons,
-or other numerical student-related problems.
-
-Do NOT assume that the question must match a predefined calculation
-type.
-
-Understand the complete meaning of the question first.
-
-Show the important calculation steps clearly.
-
-Check the arithmetic before giving the final answer.
-
-If necessary information is missing, clearly state what information
-is required instead of inventing values.
-
-If the question is ambiguous, explain the assumption you are making.
-
-Return a clear, student-friendly answer.
-"""
-
-    from google import genai
-    from google.genai import types
-
-    client = st.session_state.get("_gemini_client")
-
-    if client is None:
-
-        api_key = st.secrets["GEMINI_API_KEY"]
-
-        client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(
-                api_version="v1",
-                timeout=60000,
-            ),
-        )
-
-        st.session_state["_gemini_client"] = client
-
-    interaction = client.interactions.create(
-        model="gemini-3.8-flash",
-        system_instruction=calculation_instruction,
-        input=question,
-        generation_config={
-            "thinking_level": "low",
-        },
-    )
-
-    return interaction.output_text
+    # Final safety limit for the complete context.
+    return context[:6000]
 
 
 # =========================================================
@@ -203,6 +126,10 @@ user_question = st.chat_input(
 )
 
 
+# =========================================================
+# PROCESS USER QUESTION
+# =========================================================
+
 if user_question:
 
     # =====================================================
@@ -211,8 +138,7 @@ if user_question:
 
     with st.chat_message("user"):
 
-        st.write(user_question)
-
+        st.markdown(user_question)
 
     st.session_state.messages.append(
         {
@@ -223,7 +149,7 @@ if user_question:
 
 
     # =====================================================
-    # BUILD CONTEXT
+    # BUILD CONVERSATION CONTEXT
     # =====================================================
 
     contextual_question = build_context(
@@ -234,15 +160,15 @@ if user_question:
     try:
 
         # =================================================
-        # STEP 1 — SEMANTIC DOMAIN CLASSIFICATION
+        # STEP 1 — COMBINED AGENT ANALYSIS
         # =================================================
 
         with st.status(
-            "🔎 Understanding your request...",
+            "🔎 Understanding and planning your request...",
             expanded=False,
         ):
 
-            domain_decision = classify_domain(
+            agent_plan = analyze_request(
                 contextual_question
             )
 
@@ -251,7 +177,7 @@ if user_question:
         # OUT-OF-DOMAIN REQUEST
         # =================================================
 
-        if not domain_decision.in_domain:
+        if not agent_plan.in_domain:
 
             answer = (
                 "Sorry, I can only assist with "
@@ -273,12 +199,17 @@ if user_question:
 
                     st.write(
                         "**Category:**",
-                        domain_decision.category,
+                        agent_plan.category,
+                    )
+
+                    st.write(
+                        "**Selected action:**",
+                        agent_plan.action,
                     )
 
                     st.write(
                         "**Reason:**",
-                        domain_decision.reason,
+                        agent_plan.reason,
                     )
 
 
@@ -296,24 +227,6 @@ if user_question:
 
         else:
 
-            # =============================================
-            # STEP 2 — AGENT PLANNING
-            # =============================================
-
-            with st.status(
-                "🧠 Planning the best action...",
-                expanded=False,
-            ):
-
-                agent_decision = plan_action(
-                    contextual_question
-                )
-
-
-            # =============================================
-            # ASSISTANT RESPONSE
-            # =============================================
-
             with st.chat_message("assistant"):
 
                 # =========================================
@@ -330,34 +243,17 @@ if user_question:
 
                     st.write(
                         "**Category:**",
-                        domain_decision.category,
+                        agent_plan.category,
                     )
 
                     st.write(
                         "**Selected action:**",
-                        agent_decision.action,
+                        agent_plan.action,
                     )
 
                     st.write(
                         "**Reason:**",
-                        agent_decision.reason,
-                    )
-
-
-                    # =====================================
-                    # EXECUTION LAYER
-                    # =====================================
-
-                    execution_result = (
-                        execute_agent_decision(
-                            agent_decision,
-                            user_question,
-                        )
-                    )
-
-                    st.write(
-                        "**Execution type:**",
-                        execution_result["type"],
+                        agent_plan.reason,
                     )
 
 
@@ -365,7 +261,7 @@ if user_question:
                 # ACTION 1 — REJECT
                 # =========================================
 
-                if agent_decision.action == "reject":
+                if agent_plan.action == "reject":
 
                     answer = (
                         "Sorry, I can only assist with "
@@ -380,86 +276,55 @@ if user_question:
                 # ACTION 2 — CALCULATOR
                 # =========================================
 
-                elif (
-                    agent_decision.action
-                    == "calculator"
-                ):
+                elif agent_plan.action == "calculator":
 
                     with st.spinner(
                         "🧮 Solving your calculation..."
                     ):
 
-                        answer = (
-                            answer_with_calculation(
-                                contextual_question
-                            )
+                        answer = answer_with_calculation(
+                            contextual_question
                         )
 
-                    st.write(answer)
+                    st.markdown(answer)
 
 
                 # =========================================
                 # ACTION 3 — GOOGLE SEARCH
                 # =========================================
 
-                elif (
-                    agent_decision.action
-                    == "google_search"
-                ):
+                elif agent_plan.action == "google_search":
 
                     with st.spinner(
                         "🔎 Searching for current information..."
                     ):
 
-                        answer = (
-                            answer_with_google_search(
-                                contextual_question
-                            )
+                        answer = answer_with_google_search(
+                            contextual_question
                         )
 
-                    st.write(answer)
+                    st.markdown(answer)
 
                     st.info(
-                        "ℹ️ This answer used "
-                        "Google Search grounding."
+                        "ℹ️ This answer used browser search grounding."
                     )
 
 
                 # =========================================
-                # ACTION 4 — DIRECT GEMINI ANSWER
+                # ACTION 4 — DIRECT GROQ ANSWER
                 # =========================================
 
-                elif (
-                    agent_decision.action
-                    == "answer_directly"
-                ):
+                elif agent_plan.action == "answer_directly":
 
                     with st.spinner(
                         "🤖 Preparing your answer..."
                     ):
 
-                        interaction = (
-                            continue_conversation(
-                                question=user_question,
-                                previous_interaction_id=(
-                                    st.session_state
-                                    .previous_interaction_id
-                                ),
-                            )
+                        answer = continue_conversation(
+                            question=contextual_question
                         )
 
-                    answer = interaction.output_text
-
-                    st.write(answer)
-
-
-                    # =====================================
-                    # SAVE CONVERSATION ID
-                    # =====================================
-
-                    st.session_state.previous_interaction_id = (
-                        interaction.id
-                    )
+                    st.markdown(answer)
 
 
                 # =========================================
@@ -490,8 +355,57 @@ if user_question:
 
     except Exception as e:
 
+        error_message = str(e)
+
         with st.chat_message("assistant"):
 
-            st.error(
-                f"Something went wrong: {e}"
-            )
+            # =============================================
+            # GROQ RATE LIMIT ERROR
+            # =============================================
+
+            if (
+                "429" in error_message
+                or "rate_limit" in error_message.lower()
+                or "rate limit" in error_message.lower()
+                or "tokens per day" in error_message.lower()
+            ):
+
+                friendly_message = (
+                    "⚠️ The AI service has temporarily reached "
+                    "its usage limit. Please try again later."
+                )
+
+                st.warning(friendly_message)
+
+                st.caption(
+                    "The agent itself is working, but the external "
+                    "AI service is temporarily rate-limited."
+                )
+
+                answer = friendly_message
+
+
+            # =============================================
+            # OTHER ERROR
+            # =============================================
+
+            else:
+
+                answer = (
+                    "⚠️ Something went wrong while processing "
+                    "your request. Please try again."
+                )
+
+                st.error(answer)
+
+                st.caption(
+                    f"Technical details: {error_message}"
+                )
+
+
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
